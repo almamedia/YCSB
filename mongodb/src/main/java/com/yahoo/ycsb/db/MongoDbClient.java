@@ -9,7 +9,6 @@
 
 package com.yahoo.ycsb.db;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Properties;
@@ -17,16 +16,13 @@ import java.util.Set;
 import java.util.Map;
 import java.util.Vector;
 
-import org.bson.types.ObjectId;
-
 import com.mongodb.BasicDBObject;
-import com.mongodb.DBAddress;
 import com.mongodb.DBCollection;
 import com.mongodb.DBCursor;
 import com.mongodb.DBObject;
-import com.mongodb.Mongo;
-import com.mongodb.ServerAddress;
-import com.mongodb.WriteConcern;
+import com.mongodb.MongoClient;
+import com.mongodb.MongoClientURI;
+import com.mongodb.ReadPreference;
 import com.mongodb.WriteResult;
 
 import com.yahoo.ycsb.DB;
@@ -39,17 +35,15 @@ import com.yahoo.ycsb.StringByteIterator;
  *
  * Properties to set:
  *
- * mongodb.url=mongodb://localhost:27017
+ * mongodb.uri=mongodb://localhost:27017
  * mongodb.database=ycsb
- * mongodb.writeConcern=normal
  *
- * @author ypai
+ * @author ypai, niilo
  *
  */
 public class MongoDbClient extends DB {
 
-    private Mongo mongo;
-    private WriteConcern writeConcern;
+	private MongoClient mongoClient;
     private String database;
 
     /**
@@ -59,31 +53,13 @@ public class MongoDbClient extends DB {
     public void init() throws DBException {
         // initialize MongoDb driver
         Properties props = getProperties();
-        String url = props.getProperty("mongodb.url");
+		String uri = props.getProperty("mongodb.uri");
         database = props.getProperty("mongodb.database");
-        String writeConcernType = props.getProperty("mongodb.writeConcern");
-
-        if ("none".equals(writeConcernType)) {
-            writeConcern = WriteConcern.NONE;
-        } else if ("strict".equals(writeConcernType)) {
-            writeConcern = WriteConcern.SAFE;
-        } else if ("normal".equals(writeConcernType)) {
-            writeConcern = WriteConcern.NORMAL;
-        }
 
         try {
-            // strip out prefix since Java driver doesn't currently support
-            // standard connection format URL yet
-            // http://www.mongodb.org/display/DOCS/Connections
-            if (url.startsWith("mongodb://")) {
-                url = url.substring(10);
-            }
-
-            // need to append db to url.
-            url += "/"+database;
-            System.out.println("new database url = "+url);
-            mongo = new Mongo(new DBAddress(url));
-            System.out.println("mongo connection created with "+url);
+			MongoClientURI mci = new MongoClientURI(uri);
+			mongoClient = new MongoClient(mci);
+            System.out.println("mongo connection created :: "+mongoClient.toString());
         } catch (Exception e1) {
             System.err.println(
                     "Could not initialize MongoDB connection pool for Loader: "
@@ -103,24 +79,16 @@ public class MongoDbClient extends DB {
      * @return Zero on success, a non-zero error code on error. See this class's description for a discussion of error codes.
      */
     public int delete(String table, String key) {
-        com.mongodb.DB db=null;
+        com.mongodb.DB db = null;
         try {
-            db = mongo.getDB(database);
-            db.requestStart();
-            DBCollection collection = db.getCollection(table);
-            DBObject q = new BasicDBObject().append("_id", key);
-            WriteResult res = collection.remove(q, writeConcern);
-            return res.getN() == 1 ? 0 : 1;
+			db = mongoClient.getDB(database);
+			DBCollection collection = db.getCollection(table);
+			DBObject q = new BasicDBObject().append("_id", key);
+			WriteResult res = collection.remove(q, mongoClient.getWriteConcern());
+			return res.getN() == 1 ? 0 : 1;
         } catch (Exception e) {
             System.err.println(e.toString());
             return 1;
-        }
-        finally
-        {
-            if (db!=null)
-            {
-                db.requestDone();
-            }
         }
     }
 
@@ -137,25 +105,17 @@ public class MongoDbClient extends DB {
     public int insert(String table, String key, HashMap<String, ByteIterator> values) {
         com.mongodb.DB db = null;
         try {
-            db = mongo.getDB(database);
-
-            db.requestStart();
-
+			db = mongoClient.getDB(database);
             DBCollection collection = db.getCollection(table);
             DBObject r = new BasicDBObject().append("_id", key);
-	    for(String k: values.keySet()) {
-		r.put(k, values.get(k).toArray());
-	    }
-            WriteResult res = collection.insert(r,writeConcern);
-            return res.getError() == null ? 0 : 1;
+	    	for(String k: values.keySet()) {
+				r.put(k, values.get(k).toArray());
+	    	}
+            WriteResult res = collection.insert(r,mongoClient.getWriteConcern());
+			return 0;
         } catch (Exception e) {
             System.err.println(e.toString());
             return 1;
-        } finally {
-            if (db!=null)
-            {
-                db.requestDone();
-            }
         }
     }
 
@@ -174,10 +134,7 @@ public class MongoDbClient extends DB {
             HashMap<String, ByteIterator> result) {
         com.mongodb.DB db = null;
         try {
-            db = mongo.getDB(database);
-
-            db.requestStart();
-
+			db = mongoClient.getDB(database);
             DBCollection collection = db.getCollection(table);
             DBObject q = new BasicDBObject().append("_id", key);
             DBObject fieldsToReturn = new BasicDBObject();
@@ -201,11 +158,6 @@ public class MongoDbClient extends DB {
         } catch (Exception e) {
             System.err.println(e.toString());
             return 1;
-        } finally {
-            if (db!=null)
-            {
-                db.requestDone();
-            }
         }
     }
 
@@ -223,10 +175,7 @@ public class MongoDbClient extends DB {
     public int update(String table, String key, HashMap<String, ByteIterator> values) {
         com.mongodb.DB db = null;
         try {
-            db = mongo.getDB(database);
-
-            db.requestStart();
-
+			db = mongoClient.getDB(database);
             DBCollection collection = db.getCollection(table);
             DBObject q = new BasicDBObject().append("_id", key);
             DBObject u = new BasicDBObject();
@@ -239,16 +188,11 @@ public class MongoDbClient extends DB {
             }
             u.put("$set", fieldsToSet);
             WriteResult res = collection.update(q, u, false, false,
-                    writeConcern);
+                    mongoClient.getWriteConcern());
             return res.getN() == 1 ? 0 : 1;
         } catch (Exception e) {
             System.err.println(e.toString());
             return 1;
-        } finally {
-            if (db!=null)
-            {
-                db.requestDone();
-            }
         }
     }
 
@@ -267,9 +211,9 @@ public class MongoDbClient extends DB {
     public int scan(String table, String startkey, int recordcount,
             Set<String> fields, Vector<HashMap<String, ByteIterator>> result) {
         com.mongodb.DB db=null;
+		ReadPreference preference = ReadPreference.primaryPreferred();
         try {
-            db = mongo.getDB(database);
-            db.requestStart();
+			db = mongoClient.getDB(database);
             DBCollection collection = db.getCollection(table);
             // { "_id":{"$gte":startKey, "$lte":{"appId":key+"\uFFFF"}} }
             DBObject scanRange = new BasicDBObject().append("$gte", startkey);
@@ -285,14 +229,5 @@ public class MongoDbClient extends DB {
             System.err.println(e.toString());
             return 1;
         }
-        finally
-        {
-            if (db!=null)
-            {
-                db.requestDone();
-            }
-        }
-
     }
 }
-
